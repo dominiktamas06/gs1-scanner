@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GS1 Scanner</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0056b3">
+    <link rel="apple-touch-icon" href="icon.png">
+    
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bwip-js/3.0.4/bwip-js-min.js"></script>
+
+    <style>
+        body { font-family: sans-serif; margin: 0; background: #f0f2f5; display: flex; flex-direction: column; height: 100vh; }
+        header { background: #0056b3; color: white; padding: 15px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        h1 { margin: 0; font-size: 1.2rem; }
+        
+        .content { flex: 1; overflow-y: auto; padding: 15px; }
+        .panel { display: none; }
+        .panel.active { display: block; animation: fadeIn 0.3s; }
+        
+        /* Gombok és Inputok */
+        input { width: 100%; padding: 12px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box; font-size: 16px; }
+        label { font-weight: bold; font-size: 0.9rem; color: #555; display: block; margin-bottom: 5px; }
+        
+        .btn-main { width: 100%; padding: 15px; background: #28a745; color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: bold; margin-top: 10px; }
+        
+        /* Navigáció (Alul) */
+        nav { background: white; display: flex; border-top: 1px solid #ddd; }
+        nav button { flex: 1; padding: 15px; border: none; background: transparent; font-size: 1rem; color: #666; }
+        nav button.active { color: #0056b3; font-weight: bold; border-top: 3px solid #0056b3; }
+
+        #reader { width: 100%; border-radius: 8px; overflow: hidden; background: #000; }
+        #result-card { background: white; padding: 15px; border-radius: 8px; margin-top: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); display: none; }
+        
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>GS1 Mester App</h1>
+</header>
+
+<div class="content">
+    <div id="view-scan" class="panel active">
+        <div id="reader"></div>
+        <p style="text-align: center; color: #777; font-size: 0.9rem;">Mutasd a kamerát a kódra</p>
+        
+        <div id="result-card">
+            <h3 style="margin-top:0;">Eredmény:</h3>
+            <div id="scan-text" style="word-break: break-all; color: #0056b3; font-weight: bold;"></div>
+            <div id="parsed-text" style="margin-top:10px; font-size: 0.9rem; color: #333;"></div>
+        </div>
+    </div>
+
+    <div id="view-gen" class="panel">
+        <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+            <label>GTIN (01)</label>
+            <input type="number" id="inp-gtin" value="05991234567890">
+            
+            <label>Lejárat (17) - ÉÉHHNN</label>
+            <input type="number" id="inp-expiry" value="251231">
+            
+            <label>Batch (10)</label>
+            <input type="text" id="inp-batch" value="LOT123">
+            
+            <button class="btn-main" onclick="generate()">Generálás</button>
+            
+            <div style="text-align: center; margin-top: 20px; overflow-x: auto;">
+                <canvas id="barcodeCanvas"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<nav>
+    <button id="nav-scan" class="active" onclick="setView('scan')">📷 Olvasás</button>
+    <button id="nav-gen" onclick="setView('gen')">⚙️ Generálás</button>
+</nav>
+
+<script>
+    // -- Service Worker Regisztráció --
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('sw.js')
+        .then(() => console.log("Service Worker regisztrálva"));
+    }
+
+    // -- App Logika --
+    let scanner = null;
+
+    function setView(view) {
+        document.querySelectorAll('.panel').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('nav button').forEach(el => el.classList.remove('active'));
+        
+        document.getElementById('view-' + view).classList.add('active');
+        document.getElementById('nav-' + view).classList.add('active');
+
+        if(view === 'scan') startScan();
+        else stopScan();
+    }
+
+    function startScan() {
+        if(!scanner) scanner = new Html5Qrcode("reader");
+        scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, onScanSuccess)
+        .catch(err => console.log("Kamera hiba", err));
+    }
+
+    function stopScan() {
+        if(scanner && scanner.isScanning) {
+            scanner.stop().then(() => console.log("Kamera leállt"));
+        }
+    }
+
+    function onScanSuccess(decodedText) {
+        document.getElementById('result-card').style.display = 'block';
+        document.getElementById('scan-text').innerText = decodedText;
+        
+        // Egyszerűsített GS1 parser
+        let parsed = "";
+        if(decodedText.includes("01")) parsed += "GTIN azonosítva.<br>";
+        if(decodedText.includes("17")) parsed += "Dátum azonosítva.<br>";
+        document.getElementById('parsed-text').innerHTML = parsed;
+    }
+
+    function generate() {
+        let txt = `(01)${document.getElementById('inp-gtin').value}`;
+        let exp = document.getElementById('inp-expiry').value;
+        let batch = document.getElementById('inp-batch').value;
+        
+        if(exp) txt += `(17)${exp}`;
+        if(batch) txt += `(10)${batch}`;
+
+        try {
+            bwipjs.toCanvas('barcodeCanvas', {
+                bcid: 'gs1-128', text: txt, scale: 3, height: 10, includetext: true
+            });
+        } catch(e) { alert("Hiba: " + e); }
+    }
+    
+    // Indításkor generáljunk egyet
+    window.onload = function() { generate(); startScan(); };
+</script>
+</body>
+</html>
